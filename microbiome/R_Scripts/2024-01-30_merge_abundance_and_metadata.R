@@ -10,7 +10,7 @@ library(readxl)
 # ---- read in data ----
 
 getwd()
-setwd("2024_SIO278_collab-main/microbiome/")
+# setwd("2024_SIO278_collab-main/microbiome/")
 
 metadata <- read_excel("metadata_SRP128128.xlsx")
 
