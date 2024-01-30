@@ -25,7 +25,7 @@ asv.abund.df <- as.data.frame(asv.abund.df[-1,])
 asv.abund.df$Run <- rownames(asv.abund.df)
 
 combined.df <- merge(metadata, asv.abund.df, by = "Run")
-
+saveRDS(combined.df, file = "2024-01-30_combined_abund_metadata.rds")
 
 
 
