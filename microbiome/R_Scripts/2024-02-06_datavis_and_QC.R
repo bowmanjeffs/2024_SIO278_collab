@@ -38,6 +38,9 @@ asv.meta.df$subject <- substr(asv.meta.df$sample_title, 1, 4)
 asv.meta.df.before <- asv.meta.df[which(asv.meta.df$status == "before"),]
 asv.meta.df.during <- asv.meta.df[which(asv.meta.df$status == "during"),]
 
+saveRDS(asv.meta.df.before, file = "2024-02-13_asv_meta_before.rds")
+saveRDS(asv.meta.df.during, file = "2024-02-13_asv_meta_during.rds")
+
 
 # ---- histograms ----
 
@@ -105,6 +108,7 @@ asv.nmds <- as.data.frame(NMS$points)  #Using the scores function from vegan to 
 
 ggplot(data = asv.nmds) +
   geom_point(aes(x = MDS1, y = MDS2)) +
+  labs(x = "Dim 1", y = "Dim 2") +
   theme_bw()
 
 
