@@ -7,12 +7,8 @@ library(ggplot2)
 
 #Quality Control of data----
 
-#Are there any extreme outliers found amongst the environmental parameters? 
+#Are there any extreme outliers found in the environmental parameters? 
 #Use histograms to visualize the data:
-
-#Downloading the final organized dataframe----
-
-write.csv(seq_env_comb, file = "PnB_ASV_RA_Env_Final.csv")
 
 
 #Quality Control of data----
@@ -23,16 +19,20 @@ seq_env_comb<-read.csv("PnB_ASV_RA_Env_Final.csv")
 #forloop, to examine histograms of environmental data 
 for(i in 5:55){
   env_data<-seq_env_comb[i]
-  hist<- hist(env_data[,], main=paste("Histogram of", colnames(env_data)), xlab="Value")
+  hist(env_data[,], main=paste("Histogram of", colnames(env_data)), xlab="Value")
   box(lty = "solid")
-  print(hist)
 }
 
 #Remove GYRO (only zero values)
 
 seq_env_comb<-subset(seq_env_comb, select= -c(Gyro))
 
-#Other way to visualalzie specific Histograms with axis labels
+#Downloading the final organized dataframe----
+
+write.csv(seq_env_comb, file = "PnB_ASV_RA_Env_Final_QC.csv")
+
+
+#Other way to visualize specific Histograms with axis labels
 
 #Salinity 
 hist(seq_env_comb$btl_sal, xlab="Salinity", main="Histogram of Salinity")
