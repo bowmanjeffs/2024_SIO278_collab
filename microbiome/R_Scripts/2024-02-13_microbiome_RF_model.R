@@ -25,63 +25,218 @@ asv.meta.df.during <- readRDS("2024-02-13_asv_meta_during.rds")
 
 # ---- split into training and testing data ----
 
-# microbiome.df <- asv.meta.df.before
+# microbiome.df <- asv.meta.df.before 
 microbiome.df <- asv.meta.df.during
 microbiome.df <- microbiome.df[,c(ncol(microbiome.df), 1:(ncol(microbiome.df)-1))]
 
 meta.cols <- c(1:50)
 asv.cols <- c(51:ncol(microbiome.df))
 
-index <- sample(x = c(1:nrow(microbiome.df)), size = round(0.8*nrow(microbiome.df)), replace = F)
-
 scfa.na.remove <- which(is.na(microbiome.df$Acetate) | is.na(microbiome.df$Butyrate) | is.na(microbiome.df$Propionate))
 microbiome.df <- microbiome.df[-scfa.na.remove,]
 
-microbiome.df[,asv.cols] <- microbiome.df[,asv.cols] %>% mutate_all(~ifelse(is.nan(.), NA, .))
-microbiome.df[,asv.cols] <- microbiome.df[,asv.cols] %>% replace(is.na(.), 0)
+is.nan.data.frame <- function(x)
+  do.call(cbind, lapply(x, is.nan))
+microbiome.df[is.nan(microbiome.df)] <- 0
+microbiome.df[is.na(microbiome.df)] <- 0
+
 
 low.abundance.index <- which(colSums(microbiome.df[,asv.cols]) <= 10) # remove taxa with low abundance
 microbiome.df <- microbiome.df[,-low.abundance.index]
 asv.cols <- c(51:ncol(microbiome.df))
 
-microbiome.df[,asv.cols] <- microbiome.df[,asv.cols]/colSums(microbiome.df[,asv.cols]) # normalize
+microbiome.df[,asv.cols] <- microbiome.df[,asv.cols]/rowSums(microbiome.df[,asv.cols]) # normalize
 
+index <- sample(x = c(1:nrow(microbiome.df)), size = round(0.7*nrow(microbiome.df)), replace = F)
 train <- microbiome.df[index,]
 test <- microbiome.df[-index,]
 
 # ---- (OPTIONAL) Boruta predictor selection algorithm ----
 
-## this removes precitor variables (ASVs) that predict output worse than a randomized version of themselves
+## this removes predictor variables (ASVs) that predict output worse than a randomized version of themselves
 
 boruta.df <- Boruta(x = train[,asv.cols], y = train$Butyrate) # running for butyrate
 
 boruta.results.df <- as.data.frame(boruta.df[["finalDecision"]])
 boruta.index <- rownames(boruta.results.df)[which(boruta.results.df$`boruta.df[["finalDecision"]]` != "Rejected")]
 
+microbiome.df <- microbiome.df[,c(meta.cols,which(colnames(microbiome.df) %in% boruta.index))]
+train <- microbiome.df[index,]
+test <- microbiome.df[-index,]
+asv.cols <- c(51:ncol(microbiome.df))
+
 # ---- set up random forest model ----
 
 response <- "Butyrate"
+response <- "Acetate"
 
 ## set predictors as only the ASVs that Boruta has determined to be decent predictors 
 # predictors <- boruta.index[order(colSums(asv.train)[colnames(asv.train) %in% boruta.index], decreasing = T)]
 predictors <- colnames(microbiome.df[,asv.cols])
+# predictors <- c(colnames(microbiome.df[,asv.cols]), "Acetate", "Propionate")
 
 
 m1 <- ranger(as.formula(paste(response, '.', sep = '~')),
              data = train[,c(response, predictors)])
 
 ## two different ways of calculating RMSE
-sqrt(mean((m1$predictions - train.train$aop.corrected)^2))
+sqrt(mean((m1$predictions - train$Butyrate)^2))
 sqrt(m1$prediction.error)
 
-plot(m1$predictions ~ train.train[,response])
+# plot training data
+plot(m1$predictions ~ train[,response])
+abline(a = 0, b = 1, col = "red")
+
+## assess model performance by testing model on witheld data (test data)
+butyrate.predict <- predict(m1, test) 
+
+plot(butyrate.predict$predictions ~ test[,response],
+     ylab = 'Observed',
+     xlab = 'Predicted')
+abline(a = 0, b = 1, col = "red")
+
+
+m1.lm <- lm(butyrate.predict$predictions ~ test[,response])
+# abline(0, 1, lty = 2)
+abline(m1.lm)
+summary(m1.lm)
 
 
 
+saveRDS(m1, "2024-02-27_microbiome_RF_m1.rds")
+
+# ---- parameter optimization ----
+
+## define the parameter space
+## these are all of the little settings in the model that we will try and adjust to find the best fit for the data
+
+hyper.grid <- expand.grid(
+  n.edges = seq(100, 3000, 100), # aka n.trees
+  mtry       = seq(10, 30, by = 2), # 
+  node_size  = seq(3, 9, by = 2), 
+  sample_size = c(.55, .632, .70, .80), # internal
+  OOB_RMSE   = 0 # internal
+)
+
+for(i in 1:nrow(hyper.grid)){ ## AKA for every combination of parameter settings
+  
+  # predictors <- boruta.index[order(colSums(asv.train)[colnames(asv.train) %in% boruta.index], decreasing = T)] # cannot use more n.edges than boruta predictors
+  
+  try({ ## try clause necessary because some parameter combinations are incompatible
+    
+    model <- ranger(
+      formula = as.formula(paste(response, '.', sep = '~')),
+      data = train[,c(response, predictors)], 
+      num.trees       = 500,
+      mtry            = hyper.grid$mtry[i],
+      min.node.size   = hyper.grid$node_size[i],
+      sample.fraction = hyper.grid$sample_size[i],
+      seed            = 123
+    )
+    
+    ## add OOB error to grid
+    hyper.grid$OOB_RMSE[i] <- sqrt(model$prediction.error)
+    
+    ## From the internet: 
+    ## OOB (out-of-bag) score is a performance metric for a machine learning model, 
+    ## specifically for ensemble models such as random forests. 
+    ## It is calculated using the samples that are not used in the training of the model, 
+    ## which is called out-of-bag samples.
+    ## The OOB_score is computed as the number of correctly predicted rows from the out-of-bag sample. 
+    ## OOB Error is the number of wrongly classifying the OOB Sample.
+    
+  }, silent = F)
+  
+  print(paste(i, 'out of', nrow(hyper.grid), hyper.grid$OOB_RMSE[i]))
+  
+}
+
+hyper.grid$OOB_RMSE[hyper.grid$OOB_RMSE == 0] <- NA
+hyper.grid <- na.omit(hyper.grid)
+
+hist(hyper.grid$OOB_RMSE, breaks = 100)
+
+## define selected optimal parameters for the model
+selected.params <- hyper.grid[which.min(hyper.grid$OOB_RMSE),]
+
+# ---- create final model ----
+
+# predictors <- boruta.index[order(colSums(asv.train)[colnames(asv.train) %in% boruta.index], decreasing = T)]
+
+## create second model using optimal selected paramters
+m2 <- ranger(
+  formula = as.formula(paste(response, '.', sep = '~')),
+  data = train[,c(response, predictors)],
+  num.trees       = 500,
+  mtry            = selected.params$mtry,
+  min.node.size   = selected.params$node_size,
+  sample.fraction = selected.params$sample_size,
+  seed            = 123,
+  importance = 'permutation',
+  oob.error = T
+)
+
+saveRDS(m2, "2024-02-27_microbiome_RF_m2.rds")
+
+## compare m1 and m2 with and without parameter optimization
+butyrate.predict.1 <- predict(m1, test)
+butyrate.predict.2 <- predict(m2, test)
+
+plot(butyrate.predict$predictions ~ test[,response],
+     ylab = 'Predicted',
+     xlab = 'Observed')
+abline(0, 1, lty = 2)
+abline(lm(butyrate.predict.1$predictions ~ test[,response]), col = "blue")
+abline(lm(butyrate.predict.2$predictions ~ test[,response]), col = "red")
+
+summary(lm(butyrate.predict.1$predictions ~ test[,response]))
+summary(lm(butyrate.predict.2$predictions ~ test[,response]))
 
 
+# ---- final model ----
+
+m3 <- ranger(
+  formula = as.formula(paste(response, '.', sep = '~')),
+  data = microbiome.df[,c(response, predictors)],
+  num.trees       = 500,
+  mtry            = selected.params$mtry,
+  min.node.size   = selected.params$node_size,
+  sample.fraction = selected.params$sample_size,
+  seed            = 123,
+  importance = 'permutation',
+  oob.error = T
+)
 
 
+saveRDS(m3, "2024-02-27_microbiome_RF_m3_final.rds")
+
+## compare m1 and m2 with and without parameter optimization
+butyrate.predict.1 <- predict(m1, test)
+butyrate.predict.2 <- predict(m2, test)
+butyrate.predict.3 <- predict(m3, microbiome.df)
+
+plot(butyrate.predict.1$predictions ~ test[,response],
+     ylab = 'Predicted',
+     xlab = 'Observed')
+abline(0, 1, lty = 2)
+abline(lm(butyrate.predict.1$predictions ~ test[,response]), col = "blue")
+summary(lm(butyrate.predict.1$predictions ~ test[,response]))
+
+
+plot(butyrate.predict.2$predictions ~ test[,response],
+     ylab = 'Predicted',
+     xlab = 'Observed')
+abline(0, 1, lty = 2)
+abline(lm(butyrate.predict.2$predictions ~ test[,response]), col = "red")
+summary(lm(butyrate.predict.2$predictions ~ test[,response]))
+
+
+plot(butyrate.predict.3$predictions ~ microbiome.df[,response],
+     ylab = 'Predicted',
+     xlab = 'Observed')
+abline(0, 1, lty = 2)
+abline(lm(butyrate.predict.3$predictions ~ microbiome.df[,response]), col = "green")
+summary(lm(butyrate.predict.3$predictions ~ microbiome.df[,response]))
 
 
 
