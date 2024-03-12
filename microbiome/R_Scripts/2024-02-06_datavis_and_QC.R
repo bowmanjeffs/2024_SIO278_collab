@@ -35,6 +35,8 @@ asv.meta.df$subject <- substr(asv.meta.df$sample_title, 1, 4)
 
 # ---- quick look at data ----
 
+saveRDS(asv.meta.df, file = "2024-03-05_asv_meta.rds")
+
 asv.meta.df.before <- asv.meta.df[which(asv.meta.df$status == "before"),]
 asv.meta.df.during <- asv.meta.df[which(asv.meta.df$status == "during"),]
 
