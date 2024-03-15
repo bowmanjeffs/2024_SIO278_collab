@@ -1,0 +1,268 @@
+---
+title: "BLE_Microbio1"
+author: "Zach Brown"
+date: "2024-02-22"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+#housekeeping code and calling things in
+library(readr)
+library(tidyverse)
+library(ggplot2)
+library(readxl)
+
+library(lubridate)
+library(vegan)
+library(plotly) #couldn't load
+library(goeveg) #couldn't load
+library(patchwork)
+
+#######required libraries#######################
+library(randomForest)
+library(caret)
+library(e1071)
+library(dplyr)
+
+library(tidyverse)
+library(ranger)
+library(lubridate)
+library(vegan)
+library(ranger)
+library(Boruta)
+
+
+setwd("/Users/zachbrown/Desktop/SIO/Classes/2023-24/Winter2024/SIOB278_MarineMicrobialSeminar/BLE_LTER_Data")
+
+```
+
+
+#Attempt 1 RF - regression
+
+```{r}
+#Should we divide up by filter size as well?
+#Start with 16s data, RF_classification template
+library(randomForest)
+library(caret)
+library(e1071)
+library(dplyr)
+```
+
+Work with MergedData16sSalinity3 for RF.  This chunk discusses how I tailored the dataset to meet the RF requirements, starting from confirming numeric data to converting to relative abundance to pulling the ASV and one env data predicted value (salinity) and making sure the data frame was of an okay size.
+
+```{r Prep data and run RF - step 1}
+
+#import main csv - 15k 16s ASV values and all env data - how to get data ready to go from most optimal CSV
+EnvASVData <- read.csv("EnvASVData2.csv")
+EnvASVData2 <- t(EnvASVData)
+colnames(EnvASVData2) <- EnvASVData2[1, ]
+EnvASVData2 <- EnvASVData2[-1, ]
+EnvASVData2 <- as.data.frame(EnvASVData2)
+
+SalinityASVData <- EnvASVData2[, c(8, 24:15000), drop = FALSE]
+SalinityASVData2 <- SalinityASVData[!is.na(SalinityASVData[, 'Salinity']), ]
+str(SalinityASVData2)
+SalinityASVData3 <- apply(SalinityASVData2, MARGIN = 2, FUN = as.numeric)
+SalinityASVData3 <- as.data.frame(SalinityASVData3)
+str(SalinityASVData3)
+
+#Set a dataframe as the dataframe we want to put through random forest
+Data16sTry2 <- SalinityASVData3
+
+# Data Partition in 70% training dataset and 30% test dataset - directly from code
+set.seed(123)
+ind <- sample(2, nrow(Data16sTry2), replace = TRUE, prob = c(0.7, 0.3))
+train16sSalinity <- Data16sTry2[ind==1,]
+test16sSalinity <- Data16sTry2[ind==2,]
+
+#running rf - taken directly from code
+set.seed(4444)
+rf16sSalinity2 <- randomForest(Salinity~., #looking at phase while compared to all the columns so dot (.) is given after tilda (~)
+                   data=train16sSalinity, #train data is used to train
+                   ntree = 200, #number of trees to run
+                   importance = TRUE, #evaluates importance of a predictor
+                   proximity = TRUE) #calculates the proximity measure among the rows
+
+#plotting error-shows the error with growing number of trees in a forest
+plot(rf16sSalinity2)
+
+#saving the parameters used in running RF
+sink(paste0("RF_parameter2",".txt"))
+rf16sSalinity2
+sink()
+
+#predicting the dependent variable in the training set using generated RF model
+p1 <- predict(rf16sSalinity2, train16sSalinity)
+write.csv(p1,paste0("trainingSalinity16s2",".csv"))
+
+#predicting the dependent variable in the validation set using generated RF model
+p2 <- predict(rf16sSalinity2, test16sSalinity)
+write.csv(p2,paste0("validationSalinity16s2",".csv"))
+
+```
+
+
+```{r Training Accuracy - step 2}
+#read in data
+data <- SalinityASVData3 #define the dataframe we used for training
+data2 <- read.csv(paste0("trainingSalinity16s",".csv")) #pull in data from RF
+colnames(data2) <- c("SampleNumber", "ActualValue") #and rename it
+
+#pull real data for samples that line up with the training dataset
+df2 <- data %>%  select(1, Salinity) #pull all salinity values
+df2 <- data.frame(blank_column = NA, df2) #create a blank column aligning with salinity values
+df2$blank_column <- 1:222 #label blank column with the number of rows there are 
+colnames(df2) <- c("SampleNumber", "ActualValue") #change the column names
+
+#call in the the trained data with the predicted values
+
+tr <- read.csv(paste0("trainingSalinity16s",".csv")) #call in the csv saved at the end of the last chunk
+colnames(tr) <- c("SampleNumber", "PredictedValue") #rename the column names
+trainingdatapoints <- tr[,1] #make a vector that has the salinity values that were predicted in the above random forest model
+
+#From the training data, pull the associated 
+indices <- match(trainingdatapoints, df2$SampleNumber) #make a list of the row numbers that match with the trained data
+df2_2 <- df2[indices, ] #make a new dataframe that pulls the correct rows out of the dataframe that had all of the real data
+colnames(df2_2) <- c("SampleNumber", "ActualValue")
+
+#Finally merge the training data and the real values into a new dataframe by the sample number
+total1 <- merge(tr,df2_2,by="SampleNumber")
+write.csv(total1,"predicted_vs_actual_in_training.csv", row.names = FALSE) #save the dataframe as a CSV
+
+
+#plotting predicted vs actual value
+
+#pdf(paste0("Training_plot",".pdf"),8,4) - don't need to run this I don't think
+ggplot(total1, aes(y=ActualValue, x=PredictedValue)) +  geom_point() + geom_smooth(method=lm)+
+  ggtitle(paste0("Model RM"," training plot")) +
+  xlab("Predicted Salinity") + ylab("Actual Salinity") 
+#dev.off() - also don't need to run this
+
+#running linear model for training - did not change any of this from the example
+fit <- lm(ActualValue ~ PredictedValue, data = total1)
+sink(paste0("training","_accuracy.txt"))
+print(summary(fit))
+sink()
+```
+
+```{r}
+ggplot(x=train16sSalinity$Salinity, y=p1)
+train16sSalinity$PredictedSalinity<-p1
+ggplot(data=train16sSalinity, aes(x=Salinity, y=PredictedSalinity)) +
+  geom_point()+
+  geom_smooth(method = "lm")+
+  xlab("Actual Salinity Concentration")+
+  ylab("Predicted Salinity Concentration")+
+  ggtitle("Random Forest Training Data Validation")
+
+Model1<-lm(Salinity~PredictedSalinity,data=train16sSalinity)
+summary(Model1) #Same as what was put out by the linear model for training
+```
+
+
+```{r Validation Accuracy - Step 3}
+
+pr <- read.csv(paste0("validationSalinity16s",".csv"))
+colnames(pr) <- c("SampleNumber", "PredictedValue")
+validationdatapoints <- pr[,1] #make a vector that has the salinity values that were predicted in the above random forest model
+#From the training data, pull the associated 
+indices2 <- match(validationdatapoints, df2$SampleNumber) #make a list of the row numbers that match with the trained data
+df2_3 <- df2[indices2, ] #make a new dataframe that pulls the correct rows out of the dataframe that had all of the real data
+colnames(df2_3) <- c("SampleNumber", "ActualValue")
+
+total2 <- merge(pr,df2_3,by="SampleNumber")
+write.csv(total2,"predicted_vs_actual_in_validation.csv", row.names = FALSE)
+
+#plotting predicted vs actual value
+
+#pdf(paste0("Validation_plot",x,y,z,".pdf"),8,4)
+ggplot(total2, aes(y=ActualValue, x=PredictedValue)) +  geom_point() + geom_smooth(method=lm)+  
+  ggtitle(paste0("Model RM"," validation plot")) +
+  xlab("Predicted Salinity") + ylab("Actual Salinity") 
+#dev.off()
+
+#running linear model for validation
+fit2 <- lm(ActualValue ~ PredictedValue, data = total2)
+
+sink(paste0("validation","_accuracy.txt"))
+print(summary(fit2))
+sink()
+```
+
+
+```{r}
+ggplot(x=test16sSalinity$Salinity, y=p2)
+test16sSalinity$PredictedSalinity<-p2
+ggplot(data=train16sSalinity, aes(x=Salinity, y=PredictedSalinity)) +
+  geom_point()+
+  geom_smooth(method = "lm")+
+  xlab("Actual Salinity Concentration")+
+  ylab("Predicted Salinity Concentration")+
+  ggtitle("Random Forest Training Data Validation")
+
+Model2<-lm(Salinity~PredictedSalinity,data=test16sSalinity)
+summary(Model2)
+```
+
+
+```{r}
+#Follow example from microbiome group
+
+#predictors should be all ASV values used in RF model
+predictors <- SalinityASVData3[ , c(2:ncol(SalinityASVData3))]
+
+hyper.grid <- expand.grid(
+  n.edges = seq(100, 3000, 100), # aka n.trees
+  mtry       = seq(10, 30, by = 2), # 
+  node_size  = seq(3, 9, by = 2), 
+  sample_size = c(.55, .632, .70, .80), # internal
+  OOB_RMSE   = 0 # internal
+)
+
+for(i in 1:nrow(hyper.grid)){ ## AKA for every combination of parameter settings
+  
+  # predictors <- boruta.index[order(colSums(asv.train)[colnames(asv.train) %in% boruta.index], decreasing = T)] # cannot use more n.edges than boruta predictors
+  
+  try({ ## try clause necessary because some parameter combinations are incompatible
+    
+    model <- ranger(
+      formula = Salinity~.,
+      data = train16sSalinity, 
+      num.trees       = hyper.grid$n.edges[i],
+      mtry            = hyper.grid$mtry[i],
+      min.node.size   = hyper.grid$node_size[i],
+      sample.fraction = hyper.grid$sample_size[i],
+      seed            = 123,
+    )
+    
+    ## add OOB error to grid
+    hyper.grid$OOB_RMSE[i] <- sqrt(model$prediction.error)
+    
+    ## From the internet: 
+    ## OOB (out-of-bag) score is a performance metric for a machine learning model, 
+    ## specifically for ensemble models such as random forests. 
+    ## It is calculated using the samples that are not used in the training of the model, 
+    ## which is called out-of-bag samples.
+    ## The OOB_score is computed as the number of correctly predicted rows from the out-of-bag sample. 
+    ## OOB Error is the number of wrongly classifying the OOB Sample.
+    
+  }, silent = F)
+  
+  print(paste(i, 'out of', nrow(hyper.grid), hyper.grid$OOB_RMSE[i]))
+  
+}
+
+hyper.grid$OOB_RMSE[hyper.grid$OOB_RMSE == 0] <- NA
+hyper.grid <- na.omit(hyper.grid)
+
+hist(hyper.grid$OOB_RMSE, breaks = 100)
+
+## define selected optimal parameters for the model
+selected.params <- hyper.grid[which.min(hyper.grid$OOB_RMSE),]
+```
+
